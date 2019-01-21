@@ -27,6 +27,7 @@ type Config {
     language: String!
     level(domain: String!): Int!
     lastSeen(domain: String!): Int!
+    theme(domain: String!): Int!
 }
 
 type Subscription {

@@ -32,6 +32,7 @@ let indexJsExportAll = '';
  * @param curParentType parent type of the current field
  * @param curParentName parent name of the current field
  * @param argumentsDict dictionary of arguments from all fields
+ * @param duplicateArgCounts map for deduping argument name collisions
  * @param crossReferenceKeyList list of the cross reference
  * @param curDepth currentl depth of field
  */
@@ -40,6 +41,7 @@ const generateQuery = (
   curParentType,
   curParentName,
   argumentsDict = {},
+  duplicateArgCounts = {},
   crossReferenceKeyList = [], // [`${curParentName}To${curName}Key`]
   curDepth = 1,
 ) => {
@@ -56,7 +58,7 @@ const generateQuery = (
     const childKeys = Object.keys(curType.getFields());
     childQuery = childKeys
       .map(cur =>
-        generateQuery(cur, curType, curName, argumentsDict, crossReferenceKeyList, curDepth + 1).queryStr
+        generateQuery(cur, curType, curName, argumentsDict, duplicateArgCounts, crossReferenceKeyList, curDepth + 1).queryStr
       )
       .filter(cur => cur)
       .join('\n');
@@ -65,10 +67,9 @@ const generateQuery = (
   if (!(curType.getFields && !childQuery)) {
     queryStr = `${'    '.repeat(curDepth)}${field.name}`;
     if (field.args.length > 0) {
-      const dict = getArgsDict(field);
+      const dict = getFieldArgsDict(field, duplicateArgCounts, argumentsDict);
       Object.assign(argumentsDict, dict);
-      const argsToVarsStr = getArgsToVarsStr(dict);
-      queryStr += `(${argsToVarsStr})`;
+      queryStr += `(${getArgsToVarsStr(dict)})`;
     }
     if (childQuery) {
       queryStr += `{\n${childQuery}\n${'    '.repeat(curDepth)}}`;
@@ -88,7 +89,7 @@ const generateQuery = (
         const valueType = gqlSchema.getType(valueTypeName);
         const childQuery = Object.keys(valueType.getFields())
           .map(cur =>
-            generateQuery(cur, valueType, curName, argumentsDict, crossReferenceKeyList, curDepth + 2).queryStr
+            generateQuery(cur, valueType, curName, argumentsDict, duplicateArgCounts, crossReferenceKeyList, curDepth + 2).queryStr
           )
           .filter(cur => cur)
           .join('\n');
@@ -125,12 +126,8 @@ const generateFile = (obj, description) => {
   fs.mkdirSync(writeFolder);
   Object.keys(obj).forEach((type) => {
     const queryResult = generateQuery(type, description);
+    const varsToTypesStr = getVarsToTypesStr(queryResult.argumentsDict);
     let query = queryResult.queryStr;
-    const field = gqlSchema.getType(description).getFields()[type];
-    const varsToTypesStr = getVarsToTypesStr({
-        ...getArgsDict(field),
-        ...queryResult.argumentsDict
-    });
     query = `${description.toLowerCase()} ${type}${varsToTypesStr ? `(${varsToTypesStr})` : ''}{\n${query}\n}`;
     fs.writeFileSync(path.join(writeFolder, `./${type}.gql`), query);
     indexJs += `module.exports.${type} = fs.readFileSync(path.join(__dirname, '${type}.gql'), 'utf8');\n`;
@@ -139,10 +136,22 @@ const generateFile = (obj, description) => {
   indexJsExportAll += `module.exports.${outputFolderName} = require('./${outputFolderName}');\n`;
 };
 
-function getArgsDict(field) {
+function getFieldArgsDict(field, duplicateArgCounts, allArgsDict = {}) {
   return field.args.reduce((o, arg) => {
-      o[`${field.name}_${arg.name}`] = arg;
-      return o;
+    if (arg.name in duplicateArgCounts) {
+      const index = duplicateArgCounts[arg.name] + 1;
+      duplicateArgCounts[arg.name] = index;
+      o[`${arg.name}${index}`] = arg;
+    }
+    else if (allArgsDict[arg.name]) {
+      const index = 1;
+      duplicateArgCounts[arg.name] = index;
+      o[`${arg.name}${index}`] = arg;
+    }
+    else {
+      o[arg.name] = arg;
+    }
+    return o;
   }, {});
 }
 
